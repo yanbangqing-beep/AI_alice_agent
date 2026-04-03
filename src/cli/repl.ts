@@ -6,6 +6,7 @@ import { ToolRegistry } from "../tools/registry.js";
 import { getBuiltinTools } from "../tools/builtin/index.js";
 import { Renderer } from "./renderer.js";
 import { InputHandler } from "./input.js";
+import { ContextAssembly, detectModeCommand, getModeLabel, AVAILABLE_MODES } from "../context/assembly/index.js";
 
 /**
  * Main REPL loop.
@@ -22,16 +23,20 @@ export async function startRepl(config: AliceConfig): Promise<void> {
     tools.register(tool);
   }
 
+  // Initialize context assembly (8 dimensions)
+  const contextAssembly = new ContextAssembly(process.cwd());
+
   console.log(
     pc.dim(
       `  model: ${config.models.primary}\n` +
         `  tools: ${tools.list().join(", ")}\n` +
+        `  mode: ${getModeLabel(contextAssembly.getMode())}\n` +
         `  cwd: ${process.cwd()}\n`,
     ),
   );
 
-  // Initialize agent
-  const agent = new Agent(provider, tools, config);
+  // Initialize agent with context assembly
+  const agent = new Agent(provider, tools, config, contextAssembly);
 
   // Setup renderer
   const renderer = new Renderer({
@@ -55,6 +60,14 @@ export async function startRepl(config: AliceConfig): Promise<void> {
 
     if (userInput === null) {
       // EOF or empty
+      continue;
+    }
+
+    // Handle mode switching commands (/code, /chat, /comfort, /brief)
+    const newMode = detectModeCommand(userInput);
+    if (newMode) {
+      agent.switchMode(newMode);
+      console.log(pc.dim(`  Mode: ${getModeLabel(newMode)}`));
       continue;
     }
 
@@ -156,6 +169,12 @@ async function handleCommand(
       }
       break;
 
+    case "/mode":
+      const ctx = agent.getContextAssembly();
+      console.log(pc.dim(`  Current mode: ${getModeLabel(ctx.getMode())}`));
+      console.log(pc.dim(`  Available: ${AVAILABLE_MODES.map(m => `/${m === "coding" ? "code" : m}`).join(", ")}`));
+      break;
+
     case "/help":
       console.log(`
   ${pc.bold("Commands:")}
@@ -163,6 +182,11 @@ async function handleCommand(
     /clear             Clear screen
     /debug             Toggle debug mode
     /model [name]      Show or change model
+    /mode              Show current mode
+    /code              Switch to coding mode
+    /chat              Switch to chat mode
+    /comfort           Switch to comfort mode
+    /brief             Switch to brief mode
     /session           Show session info
     /save              Save session
     /help              Show this help
@@ -188,7 +212,8 @@ export async function runOnce(
     tools.register(tool);
   }
 
-  const agent = new Agent(provider, tools, config);
+  const contextAssembly = new ContextAssembly(process.cwd(), prompt);
+  const agent = new Agent(provider, tools, config, contextAssembly);
   const renderer = new Renderer({
     debug: config.debug,
   });

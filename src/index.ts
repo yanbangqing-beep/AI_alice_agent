@@ -7,6 +7,12 @@ export { getBuiltinTools } from "./tools/builtin/index.js";
 export { loadConfig } from "./config/loader.js";
 export { loadSkills, matchSkills, formatSkillsAsContext } from "./skills/loader.js";
 export {
+  ContextAssembly,
+  createContextAssembly,
+  buildQuickContext,
+  MemoryManager,
+} from "./context/assembly/index.js";
+export {
   compressMessages,
   needsCompression,
   estimateTokens,

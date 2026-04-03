@@ -7,6 +7,7 @@ import type {
   Message,
   Provider,
   ProviderResponse,
+  ToolDefinition,
   ToolResultBlock,
   ToolUseBlock,
 } from "./types.js";
@@ -15,28 +16,49 @@ import { ToolRegistry } from "../tools/registry.js";
 import { compressMessages, needsCompression } from "../context/compression.js";
 import { loadSkills, matchSkills, formatSkillsAsContext } from "../skills/loader.js";
 import type { AnthropicProvider } from "./provider.js";
+import { ContextAssembly, type AgentMode } from "../context/assembly/index.js";
+import { estimateTokens } from "../context/compression.js";
 
-const SYSTEM_PROMPT = `You are Alice, a helpful AI assistant. You have access to tools to help you accomplish tasks.
+/** 基础身份声明 — 最小化的 identity prompt，上下文组装在其之上叠加 */
+const BASE_PROMPT = `You are Alice, a personal AI assistant with coding ability, problem-solving skills, and emotional support capability.`;
 
-When using tools:
-- Use the bash tool for running commands
-- Use the read tool to read files before editing
-- Use the write tool to create new files
-- Use the edit tool for precise edits to existing files
-- Always check file contents before making edits
+/**
+ * 计算压缩阈值：模型窗口 - 系统提示 - 工具定义 - 安全余量
+ * 确保在 API 报错之前就触发压缩
+ */
+function computeCompressionThreshold(
+  systemPrompt: string,
+  toolDefs: ToolDefinition[],
+  modelContextWindow: number,
+): number {
+  // 估算系统提示 tokens
+  const systemTokens = Math.ceil(systemPrompt.length / 3.5);
+  // 估算工具定义 tokens
+  const toolTokens = Math.ceil(JSON.stringify(toolDefs).length / 3.5);
+  // 预留输出空间 + 安全余量
+  const outputBuffer = 8192;
+  const safetyMargin = 2000;
 
-Be concise and direct. Focus on completing the task efficiently.`;
+  return Math.max(
+    modelContextWindow - systemTokens - toolTokens - outputBuffer - safetyMargin,
+    // 最低阈值：至少保留 10k 才有意义
+    10000,
+  );
+}
 
 export class Agent {
   private session: AgentSession;
   private eventHandlers: AgentEventHandler[] = [];
   private abortController: AbortController | null = null;
+  private contextAssembly: ContextAssembly;
 
   constructor(
     private provider: Provider,
     private tools: ToolRegistry,
     private config: AliceConfig,
+    contextAssembly?: ContextAssembly,
   ) {
+    this.contextAssembly = contextAssembly ?? new ContextAssembly(process.cwd());
     this.session = {
       id: crypto.randomUUID(),
       messages: [],
@@ -65,6 +87,16 @@ export class Agent {
     return this.session;
   }
 
+  /** 获取上下文组装器 */
+  getContextAssembly(): ContextAssembly {
+    return this.contextAssembly;
+  }
+
+  /** 切换模式 */
+  switchMode(mode: AgentMode): void {
+    this.contextAssembly.switchMode(mode);
+  }
+
   /**
    * Run a single user turn through the Agent Loop.
    * This is the core LLM ↔ Tool loop.
@@ -80,11 +112,17 @@ export class Agent {
     const matched = matchSkills(skills, userMessage);
     const skillContext = formatSkillsAsContext(matched);
 
-    const systemPrompt = SYSTEM_PROMPT + skillContext;
+    const systemPrompt = this.contextAssembly.getSystemPrompt(BASE_PROMPT) + skillContext;
     const degrader = new ModelDegrader([
       this.config.models.primary,
       ...this.config.models.fallback,
     ]);
+
+    const toolDefs = this.tools.getDefinitions();
+    const modelContextWindow = this.config.compression.threshold || 80000;
+    const dynamicThreshold = computeCompressionThreshold(
+      systemPrompt, toolDefs, modelContextWindow,
+    );
 
     let turns = 0;
 
@@ -94,13 +132,14 @@ export class Agent {
       turns++;
       this.emit({ type: "turn_start", data: { turn: turns } });
 
-      // Check for context compression
-      if (needsCompression(this.session.messages, this.config.compression)) {
+      // Check for context compression with dynamic threshold
+      if (estimateTokens(this.session.messages) > dynamicThreshold) {
         this.emit({ type: "compression", data: { strategy: this.config.compression.strategy } });
         this.session.messages = await compressMessages(
           this.session.messages,
           {
             ...this.config.compression,
+            threshold: dynamicThreshold,
             provider: this.provider,
           },
         );
@@ -238,7 +277,7 @@ export class Agent {
     const skills = loadSkills(this.config.skillsDir);
     const matched = matchSkills(skills, userMessage);
     const skillContext = formatSkillsAsContext(matched);
-    const systemPrompt = SYSTEM_PROMPT + skillContext;
+    const systemPrompt = this.contextAssembly.getSystemPrompt(BASE_PROMPT) + skillContext;
 
     const degrader = new ModelDegrader([
       this.config.models.primary,
@@ -251,7 +290,18 @@ export class Agent {
       data: { prompt: systemPrompt },
     });
 
+    const toolDefs = this.tools.getDefinitions();
+
+    // 动态计算压缩阈值：模型窗口 - 系统提示 - 工具 - 输出预留
+    const modelContextWindow = this.config.compression.threshold || 80000;
+    const dynamicThreshold = computeCompressionThreshold(
+      systemPrompt,
+      toolDefs,
+      modelContextWindow,
+    );
+
     let turns = 0;
+    let emergencyRetries = 0;
 
     while (turns < this.config.maxTurns) {
       if (this.abortController.signal.aborted) break;
@@ -259,12 +309,19 @@ export class Agent {
       turns++;
       this.emit({ type: "turn_start", data: { turn: turns } });
 
-      // Compress if needed
-      if (needsCompression(this.session.messages, this.config.compression)) {
-        this.emit({ type: "compression", data: { strategy: this.config.compression.strategy } });
+      // 使用动态阈值检查压缩
+      if (estimateTokens(this.session.messages) > dynamicThreshold) {
+        this.emit({
+          type: "compression",
+          data: {
+            strategy: this.config.compression.strategy,
+            messageTokens: estimateTokens(this.session.messages),
+            threshold: dynamicThreshold,
+          },
+        });
         this.session.messages = await compressMessages(
           this.session.messages,
-          { ...this.config.compression, provider: this.provider },
+          { ...this.config.compression, threshold: dynamicThreshold, provider: this.provider },
         );
       }
 
@@ -272,8 +329,6 @@ export class Agent {
       if ("setModel" in this.provider) {
         (this.provider as AnthropicProvider).setModel(degrader.current);
       }
-
-      const toolDefs = this.tools.getDefinitions();
 
       // Emit request debug info
       const lastMsg = this.session.messages[this.session.messages.length - 1];
@@ -361,7 +416,9 @@ export class Agent {
 
       // Get the full response from provider
       const lastResponse = (this.provider as AnthropicProvider).getLastResponse?.();
-      if (lastResponse) {
+      const hasContent = lastResponse && lastResponse.content.length > 0;
+
+      if (hasContent) {
         this.session.totalTokens.input += lastResponse.usage.input_tokens;
         this.session.totalTokens.output += lastResponse.usage.output_tokens;
 
@@ -416,8 +473,70 @@ export class Agent {
 
         this.session.messages.push({ role: "user", content: toolResults });
         this.emit({ type: "turn_end", data: { turn: turns, stop_reason: "tool_use" } });
+      } else if (lastResponse) {
+        // API returned a response object but with empty content — likely context overflow
+        // Try emergency compression and retry (max 2 times)
+        const msgTokens = estimateTokens(this.session.messages);
+        if (msgTokens > 5000 && emergencyRetries < 2) {
+          emergencyRetries++;
+          this.emit({
+            type: "compression",
+            data: {
+              strategy: "emergency",
+              messageTokens: msgTokens,
+              reason: "Empty response detected, attempting emergency compression and retry",
+            },
+          });
+          // Remove the last user message (we'll re-send after compression)
+          // Actually, compress the history but keep the last user message
+          this.session.messages = await compressMessages(
+            this.session.messages,
+            {
+              ...this.config.compression,
+              threshold: 0, // Force compression regardless
+              provider: this.provider,
+            },
+          );
+          // Don't increment turns — retry this turn
+          turns--;
+          continue;
+        }
+        this.emit({
+          type: "error",
+          data: { message: "Provider returned empty response. Try /clear to reset." },
+        });
+        break;
       } else {
-        // Fallback: no final response available (shouldn't happen normally)
+        // No response object at all — stream failed
+        // Try emergency compression if there's enough history
+        const msgTokens = estimateTokens(this.session.messages);
+        if (msgTokens > 5000 && emergencyRetries < 2) {
+          emergencyRetries++;
+          this.emit({
+            type: "compression",
+            data: {
+              strategy: "emergency",
+              messageTokens: msgTokens,
+              reason: "No response from provider, attempting emergency compression and retry",
+            },
+          });
+          this.session.messages = await compressMessages(
+            this.session.messages,
+            {
+              ...this.config.compression,
+              threshold: 0,
+              provider: this.provider,
+            },
+          );
+          turns--;
+          continue;
+        }
+        this.emit({
+          type: "error",
+          data: {
+            message: "No response from provider. The model may have hit its context limit. Try /clear to reset.",
+          },
+        });
         break;
       }
     }

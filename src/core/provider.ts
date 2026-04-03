@@ -131,6 +131,9 @@ export class AnthropicProvider implements Provider {
     tools?: ToolDefinition[],
     systemPrompt?: string,
   ): AsyncIterable<ProviderStreamEvent> {
+    // Reset last response before each call
+    (this as any)._lastResponse = undefined;
+
     try {
       const params = this.buildParams(messages, tools, systemPrompt);
       const stream = this.client.messages.stream(params);
@@ -175,19 +178,29 @@ export class AnthropicProvider implements Provider {
       }
 
       // Collect the final message for the caller
-      const finalMessage = await stream.finalMessage();
-      (this as any)._lastResponse = {
-        content: parseResponseContent(
-          finalMessage.content as Anthropic.ContentBlock[],
-        ),
-        model: finalMessage.model,
-        usage: {
-          input_tokens: finalMessage.usage.input_tokens,
-          output_tokens: finalMessage.usage.output_tokens,
-        },
-        stop_reason:
-          finalMessage.stop_reason as ProviderResponse["stop_reason"],
-      };
+      try {
+        const finalMessage = await stream.finalMessage();
+        (this as any)._lastResponse = {
+          content: parseResponseContent(
+            finalMessage.content as Anthropic.ContentBlock[],
+          ),
+          model: finalMessage.model,
+          usage: {
+            input_tokens: finalMessage.usage.input_tokens,
+            output_tokens: finalMessage.usage.output_tokens,
+          },
+          stop_reason:
+            finalMessage.stop_reason as ProviderResponse["stop_reason"],
+        };
+      } catch (finalError) {
+        // finalMessage() failed — stream completed but response couldn't be parsed
+        yield {
+          type: "error",
+          error: this.wrapError(
+            new Error(`Stream completed but finalMessage() failed: ${finalError instanceof Error ? finalError.message : String(finalError)}`),
+          ),
+        };
+      }
     } catch (error) {
       yield { type: "error", error: this.wrapError(error) };
     }
