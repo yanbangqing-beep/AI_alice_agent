@@ -3,13 +3,18 @@
 import { loadConfig, parseCliArgs } from "./config/loader.js";
 import { startRepl, runOnce } from "./cli/repl.js";
 
-const { overrides, prompt } = parseCliArgs(process.argv.slice(2));
-const config = loadConfig(overrides);
+const args = process.argv.slice(2);
 
-if (prompt) {
-  // Non-interactive: run a single prompt
-  await runOnce(config, prompt);
+// Route "serve" subcommand to dedicated entry point
+if (args[0] === "serve") {
+  await import("./serve.js");
 } else {
-  // Interactive: start REPL
-  await startRepl(config);
+  const { overrides, prompt } = parseCliArgs(args);
+  const config = loadConfig(overrides);
+
+  if (prompt) {
+    await runOnce(config, prompt);
+  } else {
+    await startRepl(config);
+  }
 }

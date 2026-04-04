@@ -1,6 +1,7 @@
 import { existsSync } from "fs";
 import { join, resolve } from "path";
 import type { AliceConfig } from "../core/types.js";
+import { loadDotEnv } from "./env.js";
 
 const DEFAULT_CONFIG: AliceConfig = {
   provider: {
@@ -84,6 +85,8 @@ function loadJsonConfig(filePath: string): Partial<AliceConfig> {
 export function loadConfig(
   cliOverrides: Partial<AliceConfig> = {},
 ): AliceConfig {
+  loadDotEnv();
+
   // Layer 1: defaults
   let config = { ...DEFAULT_CONFIG };
 

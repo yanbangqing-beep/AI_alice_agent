@@ -188,6 +188,18 @@ describe("Safety", () => {
     expect(() => checkCommandSafety("rm -rf ~/")).toThrow(SafetyError);
   });
 
+  test("blocks rm -rf .", () => {
+    expect(() => checkCommandSafety("rm -rf .")).toThrow(SafetyError);
+  });
+
+  test("blocks rm -rf ..", () => {
+    expect(() => checkCommandSafety("rm -rf ..")).toThrow(SafetyError);
+  });
+
+  test("blocks rm -rf *", () => {
+    expect(() => checkCommandSafety("rm -rf *")).toThrow(SafetyError);
+  });
+
   test("allows safe commands", () => {
     expect(() => checkCommandSafety("ls -la")).not.toThrow();
     expect(() => checkCommandSafety("git status")).not.toThrow();
@@ -196,6 +208,10 @@ describe("Safety", () => {
 
   test("blocks mkfs", () => {
     expect(() => checkCommandSafety("mkfs.ext4 /dev/sda")).toThrow(SafetyError);
+  });
+
+  test("blocks find -delete", () => {
+    expect(() => checkCommandSafety("find . -name '*.tmp' -delete")).toThrow(SafetyError);
   });
 
   test("blocks .ssh access", () => {

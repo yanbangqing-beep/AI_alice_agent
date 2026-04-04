@@ -10,7 +10,12 @@
   "scripts": {
     "start": "bun run src/cli.ts",
     "dev": "bun run --watch src/cli.ts",
+    "serve": "bun run src/cli.ts serve",
+    "serve:dev": "bun run --watch src/cli.ts serve",
     "test": "bun test",
+    "eval": "bun run src/eval-cli.ts",
+    "eval:core": "bun run src/eval-cli.ts --dataset core-tools",
+    "eval:json": "bun run src/eval-cli.ts --dataset core-tools --json",
     "build": "bun build src/cli.ts --compile --outfile alice",
     "typecheck": "tsc --noEmit"
   },

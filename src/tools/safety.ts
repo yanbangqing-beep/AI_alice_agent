@@ -4,6 +4,9 @@ import type { AliceConfig } from "../core/types.js";
 const DEFAULT_DANGEROUS_COMMANDS = [
   "rm -rf /",
   "rm -rf ~",
+  "rm -rf .",
+  "rm -rf ..",
+  "rm -rf *",
   "mkfs",
   "dd if=",
   ":(){:|:&};:",
@@ -24,6 +27,10 @@ const DEFAULT_DANGEROUS_COMMANDS = [
 const DANGEROUS_PATTERNS = [
   /rm\s+(-\w*r\w*f\w*|-\w*f\w*r\w*)\s+\/(?!\S)/,
   /rm\s+(-\w*r\w*f\w*|-\w*f\w*r\w*)\s+~\//,
+  /rm\s+(-\w*r\w*f\w*|-\w*f\w*r\w*)\s+\.(?:\s|$)/,
+  /rm\s+(-\w*r\w*f\w*|-\w*f\w*r\w*)\s+\.\.(?:\s|$)/,
+  /rm\s+(-\w*r\w*f\w*|-\w*f\w*r\w*)\s+\*(?:\s|$)/,
+  /find\s+.+-delete(?:\s|$)/,
   />\s*\/dev\/[sh]d[a-z]/,
   /mkfs\./,
   /dd\s+if=.*of=\/dev/,

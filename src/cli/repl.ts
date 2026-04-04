@@ -5,7 +5,7 @@ import { Agent } from "../core/agent.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { getBuiltinTools } from "../tools/builtin/index.js";
 import { Renderer } from "./renderer.js";
-import { InputHandler } from "./input.js";
+import { CliTransport } from "../transport/cli.js";
 import { ContextAssembly, detectModeCommand, getModeLabel, AVAILABLE_MODES } from "../context/assembly/index.js";
 
 /**
@@ -38,15 +38,9 @@ export async function startRepl(config: AliceConfig): Promise<void> {
   // Initialize agent with context assembly
   const agent = new Agent(provider, tools, config, contextAssembly);
 
-  // Setup renderer
-  const renderer = new Renderer({
-    debug: config.debug,
-  });
-
-  agent.on((event) => renderer.handleEvent(event));
-
-  // Input handler
-  const input = new InputHandler();
+  // Setup CLI transport
+  const transport = new CliTransport({ debug: config.debug });
+  agent.on((event) => transport.send(event));
 
   // Handle Ctrl+C gracefully
   process.on("SIGINT", () => {
@@ -56,10 +50,9 @@ export async function startRepl(config: AliceConfig): Promise<void> {
 
   // REPL loop
   while (true) {
-    const userInput = await input.prompt();
+    const userInput = await transport.prompt();
 
     if (userInput === null) {
-      // EOF or empty
       continue;
     }
 
@@ -98,7 +91,7 @@ export async function startRepl(config: AliceConfig): Promise<void> {
   }
 
   // Cleanup
-  input.close();
+  transport.close();
 
   // Save session on exit
   try {
@@ -214,11 +207,9 @@ export async function runOnce(
 
   const contextAssembly = new ContextAssembly(process.cwd(), prompt);
   const agent = new Agent(provider, tools, config, contextAssembly);
-  const renderer = new Renderer({
-    debug: config.debug,
-  });
+  const transport = new CliTransport({ debug: config.debug });
 
-  agent.on((event) => renderer.handleEvent(event));
+  agent.on((event) => transport.send(event));
 
   process.on("SIGINT", () => {
     agent.abort();
